@@ -2,6 +2,7 @@ import { TpaServer, TpaSession } from '@augmentos/sdk';
 import { TwitterAgent } from './twitterAgent';
 import path from 'path';
 import fs from 'fs';
+import { spawn } from 'child_process';
 
 class TwitterGlassesApp extends TpaServer {
   // Track state
@@ -123,6 +124,9 @@ class TwitterGlassesApp extends TpaServer {
               text.includes("lookup")
             ) {
               this.handleTwitterProfileCommand(session, twitterAgent, text);
+            } else if (text.includes("shitpost")) {
+              this.handleShitpostCommand(session, twitterAgent, text);
+              session.layouts.showTextWall("sending shitpost...");
             } else {
               // If it's just a mention of Twitter but not a clear command
               session.layouts.showTextWall("To look up a Twitter profile, say 'Twitter profile [username]' or 'lookup [username]'");
@@ -578,6 +582,131 @@ class TwitterGlassesApp extends TpaServer {
     }, 15000);
     
     session.layouts.showTextWall(`Did you want to look up "${username}"? Please say yes or no.`);
+  }
+
+  private handleShitpostCommand(session: TpaSession, twitterAgent: TwitterAgent, text: string): void {
+    console.log("[DEBUG] Shitpost command handler called with:", text);
+    
+    // Extract the text to post from the voice command
+    let postText = "";
+    
+    if (text.includes("shitpost")) {
+      postText = text.replace(/.*shitpost/gi, "").trim();
+    }
+    
+    // If postText is empty, use a default
+    if (!postText) {
+      postText = "Just checking out these AR glasses! #AugmentOS";
+      console.log("[DEBUG] Using default shitpost text");
+    }
+    
+    console.log("[DEBUG] Extracted shitpost text:", postText);
+    
+    // Call the Python script to post the tweet
+    this.sendShitpost(session, postText)
+      .then(() => {
+        session.layouts.showTextWall(`Successfully posted: "${postText}"`);
+      })
+      .catch(error => {
+        console.error("[DEBUG] Error posting shitpost:", error);
+        session.layouts.showTextWall(`Error posting to Twitter: ${error.message}`);
+      });
+  }
+
+  private sendShitpost(session: TpaSession, postText: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      // Sanitize the text to prevent command injection
+      const sanitizedText = postText.replace(/"/g, '\\"');
+      console.log(`[DEBUG] Running Python shitpost agent with sanitized text: "${sanitizedText}"`);
+      
+      // Path to the Python script relative to where this code will run
+      const pythonScript = path.join(__dirname, 'butwitter', 'shitpost.py');
+      
+      // Check if the script exists
+      if (!fs.existsSync(pythonScript)) {
+        console.error(`[DEBUG] Python script not found at: ${pythonScript}`);
+        reject(new Error(`Python script not found at: ${pythonScript}`));
+        return;
+      }
+      
+      console.log(`[DEBUG] Running Python shitpost script: ${pythonScript}`);
+      
+      // Try different Python executable names (same as in TwitterAgent)
+      const pythonCommands = ['python3', 'python', 'py'];
+      let pythonProcess = null;
+      let errorOutput = '';
+      
+      // Try each Python command until one works
+      for (const cmd of pythonCommands) {
+        try {
+          console.log(`[DEBUG] Attempting to run with ${cmd}...`);
+          pythonProcess = spawn(cmd, [pythonScript, sanitizedText]);
+          console.log(`[DEBUG] Spawn successful with ${cmd}`);
+          break; // If spawn doesn't throw, we found a working command
+        } catch (error) {
+          console.log(`[DEBUG] Command ${cmd} failed: ${error.message}`);
+          errorOutput += `Failed to run with ${cmd}: ${error.message}\n`;
+        }
+      }
+      
+      if (!pythonProcess) {
+        console.error("[DEBUG] Could not find Python executable");
+        reject(new Error(`Could not find Python executable. Tried: ${pythonCommands.join(', ')}. ${errorOutput}`));
+        return;
+      }
+      
+      let output = '';
+      
+      // Collect stdout data
+      pythonProcess.stdout.on('data', (data) => {
+        const chunk = data.toString();
+        console.log(`Python output: ${chunk}`);
+        output += chunk;
+      });
+      
+      // Collect stderr data
+      pythonProcess.stderr.on('data', (data) => {
+        const chunk = data.toString();
+        console.error(`Python error: ${chunk}`);
+        errorOutput += chunk;
+      });
+      
+      // Add a timeout to kill the process if it takes too long
+      const processTimeout = setTimeout(() => {
+        if (pythonProcess) {
+          console.error("[DEBUG] Python shitpost process timed out after 120 seconds");
+          pythonProcess.kill();
+          reject(new Error("Python process timed out after 120 seconds"));
+        }
+      }, 120000); // 120 second timeout (2 minutes)
+      
+      // Handle process completion
+      pythonProcess.on('close', (code) => {
+        clearTimeout(processTimeout); // Clear the timeout
+        console.log(`[DEBUG] Python shitpost process exited with code ${code}`);
+        if (code === 0) {
+          resolve();
+        } else {
+          if (errorOutput.includes('No module named')) {
+            const missingModule = errorOutput.match(/No module named '([^']+)'/);
+            const moduleMessage = missingModule ? missingModule[1] : 'required modules';
+            
+            const installMessage = `Python module(s) missing. Please run: pip3 install ${moduleMessage}`;
+            console.error(installMessage);
+            reject(new Error(`${installMessage}\n\nFull error: ${errorOutput}`));
+          } else {
+            reject(new Error(`Python process exited with code ${code}: ${errorOutput}`));
+          }
+        }
+      });
+      
+      // Handle process errors
+      pythonProcess.on('error', (error) => {
+        clearTimeout(processTimeout); // Clear the timeout
+        console.error(`[DEBUG] Failed to start Python shitpost process: ${error.message}`);
+        reject(new Error(`Failed to start Python process: ${error.message}`));
+      });
+    });
   }
 }
 

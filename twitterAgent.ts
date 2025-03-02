@@ -245,4 +245,133 @@ export class TwitterAgent {
       });
     });
   }
+  
+  /**
+   * Post a tweet with the specified text
+   * @param text The text content to post as a tweet
+   * @returns Promise with the result of the posting operation
+   */
+  public async postTweet(text: string): Promise<{ success: boolean; message: string }> {
+    this.session.layouts.showTextWall(`Posting tweet: "${text}"...`);
+    
+    try {
+      const result = await this.runPythonShitposter(text);
+      console.log("Raw result from Python shitposter:", result);
+      
+      return {
+        success: true,
+        message: `Tweet posted successfully! Response: ${result}`
+      };
+    } catch (error) {
+      this.session.layouts.showTextWall(`Error posting tweet: ${error.message}`);
+      console.error('Twitter shitpost error:', error);
+      return {
+        success: false,
+        message: `Failed to post tweet: ${error.message}`
+      };
+    }
+  }
+  
+  /**
+   * Runs the Python shitpost agent with the given text
+   * @param text The text to post as a tweet
+   * @returns Promise with the agent's output
+   */
+  private runPythonShitposter(text: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      // Sanitize the text to prevent command injection
+      // Note: We're using a simple sanitization method here - for production,
+      // consider a more robust approach
+      const sanitizedText = text.replace(/"/g, '\\"'); // Escape double quotes
+      console.log(`[DEBUG] Running Python shitposter with sanitized text: "${sanitizedText}"`);
+      
+      // Path to the Python script relative to where this code will run
+      const pythonScript = path.join(__dirname, 'butwitter', 'shitpost.py');
+      
+      // Check if the script exists
+      if (!fs.existsSync(pythonScript)) {
+        console.error(`[DEBUG] Python shitpost script not found at: ${pythonScript}`);
+        reject(new Error(`Python shitpost script not found at: ${pythonScript}`));
+        return;
+      }
+      
+      console.log(`[DEBUG] Running Python shitpost script: ${pythonScript}`);
+      
+      // Try different Python executable names (reusing logic from runPythonAgent)
+      const pythonCommands = ['python3', 'python', 'py'];
+      let pythonProcess = null;
+      let errorOutput = '';
+      
+      // Try each Python command until one works
+      for (const cmd of pythonCommands) {
+        try {
+          console.log(`[DEBUG] Attempting to run with ${cmd}...`);
+          pythonProcess = spawn(cmd, [pythonScript, sanitizedText]);
+          console.log(`[DEBUG] Spawn successful with ${cmd}`);
+          break; // If spawn doesn't throw, we found a working command
+        } catch (error) {
+          console.log(`[DEBUG] Command ${cmd} failed: ${error.message}`);
+          errorOutput += `Failed to run with ${cmd}: ${error.message}\n`;
+        }
+      }
+      
+      if (!pythonProcess) {
+        console.error("[DEBUG] Could not find Python executable");
+        reject(new Error(`Could not find Python executable. Tried: ${pythonCommands.join(', ')}. ${errorOutput}`));
+        return;
+      }
+      
+      let output = '';
+      
+      // Collect stdout data
+      pythonProcess.stdout.on('data', (data) => {
+        const chunk = data.toString();
+        console.log(`Python shitpost output: ${chunk}`);
+        output += chunk;
+      });
+      
+      // Collect stderr data
+      pythonProcess.stderr.on('data', (data) => {
+        const chunk = data.toString();
+        console.error(`Python shitpost error: ${chunk}`);
+        errorOutput += chunk;
+      });
+      
+      // Add a timeout to kill the process if it takes too long
+      const processTimeout = setTimeout(() => {
+        if (pythonProcess) {
+          console.error("[DEBUG] Python shitpost process timed out after 120 seconds");
+          pythonProcess.kill();
+          reject(new Error("Python shitpost process timed out after 120 seconds"));
+        }
+      }, 120000); // 120 second timeout (2 minutes)
+      
+      // Handle process completion
+      pythonProcess.on('close', (code) => {
+        clearTimeout(processTimeout); // Clear the timeout
+        console.log(`[DEBUG] Python shitpost process exited with code ${code}`);
+        if (code === 0) {
+          resolve(output.trim());
+        } else {
+          if (errorOutput.includes('No module named')) {
+            const missingModule = errorOutput.match(/No module named '([^']+)'/);
+            const moduleMessage = missingModule ? missingModule[1] : 'required modules';
+            
+            const installMessage = `Python module(s) missing. Please run: pip3 install ${moduleMessage}`;
+            console.error(installMessage);
+            reject(new Error(`${installMessage}\n\nFull error: ${errorOutput}`));
+          } else {
+            reject(new Error(`Python shitpost process exited with code ${code}: ${errorOutput}`));
+          }
+        }
+      });
+      
+      // Handle process errors
+      pythonProcess.on('error', (error) => {
+        clearTimeout(processTimeout); // Clear the timeout
+        console.error(`[DEBUG] Failed to start Python shitpost process: ${error.message}`);
+        reject(new Error(`Failed to start Python shitpost process: ${error.message}`));
+      });
+    });
+  }
 } 
