@@ -1,0 +1,24 @@
+{
+  "name": "augmentos-cloud-example-app",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "bun --watch index.ts"
+  },
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@augmentos/sdk": "^1.0.8",
+    "@types/adm-zip": "^0.5.7",
+    "adm-zip": "^0.5.16",
+    "axios": "^1.8.1",
+    "pdf-parse": "^1.1.1",
+    "pdf.js-extract": "^0.2.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.8",
+    "typescript": "^5.8.2"
+  }
+}
