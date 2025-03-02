@@ -11,7 +11,7 @@ llm = ChatOpenAI(model="gpt-4o")
 
 async def get_twitter_profile(username):
     agent = Agent(
-        task=f"go on x.com, search for a user named {username}, click the top result to go to the profile of the user, once on the profile page and click on the button beside the three dots for the profile summary, and then copy all the text generated from the grok chat tab that appears in a div inside a floating window in the bottom right of the screen",
+        task=f"go on x.com, login with username verdakorz and password Id203133! search for a user named {username}, click the top result to go to the profile of the user, once on the profile page and click on the button beside the three dots for the profile summary, and then copy all the text generated from the grok chat tab that appears in a div inside a floating window in the bottom right of the screen",
         llm=llm,
     )
     result = await agent.run()

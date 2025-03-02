@@ -12,6 +12,10 @@ class TwitterGlassesApp extends TpaServer {
   private isAutoAdvancing: boolean = false;
   private readingSpeed: number = 5000; // Default speed (ms per chunk)
   private overlapTime: number = 1800; // Default overlap time
+  
+  // Add state for username confirmation
+  private pendingUsername: string | null = null;
+  private isAwaitingConfirmation: boolean = false;
 
   protected async onSession(session: TpaSession, sessionId: string, userId: string): Promise<void> {
     // Show welcome message
@@ -30,26 +34,36 @@ class TwitterGlassesApp extends TpaServer {
         const text = data.text.toLowerCase();
         
         if (data.isFinal) {
+          // Check if we're waiting for username confirmation
+          if (this.isAwaitingConfirmation) {
+            if (text.includes('yes') || text.includes('correct') || text.includes('right') || text.includes('confirm')) {
+              // User confirmed the username
+              this.isAwaitingConfirmation = false;
+              const username = this.pendingUsername;
+              this.pendingUsername = null;
+              
+              if (username) {
+                session.layouts.showTextWall(`Getting Twitter info for: ${username}...`);
+                this.fetchTwitterProfile(session, twitterAgent, username);
+              }
+            } else if (text.includes('no') || text.includes('wrong') || text.includes('incorrect') || text.includes('cancel')) {
+              // User rejected the username
+              this.isAwaitingConfirmation = false;
+              this.pendingUsername = null;
+              session.layouts.showTextWall("Twitter profile lookup cancelled. Please try again with a clear username.");
+            } else {
+              // Unclear response, ask again
+              session.layouts.showTextWall(`Did you want to look up "${this.pendingUsername}"? Please say yes or no.`);
+            }
+          }
           // Twitter profile commands
-          if (text.includes("twitter profile") || text.includes("get twitter info")) {
+          else if (text.includes("twitter profile") || text.includes("get twitter info")) {
             const username = text.replace(/twitter profile|get twitter info/gi, "").trim();
             if (username) {
-              session.layouts.showTextWall(`Getting Twitter info for: ${username}...`);
-              twitterAgent.getProfileInfo(username)
-                .then(profileInfo => {
-                  // Process the profile info into chunks for better reading
-                  this.twitterChunks = this.chunkText(profileInfo, 1000, 100);
-                  this.currentChunkIndex = 0;
-                  this.isDisplayingTwitterInfo = true;
-                  
-                  // Display the first chunk
-                  session.layouts.showTextWall("Twitter profile information retrieved. Starting presentation.", {
-                    durationMs: 3000
-                  });
-                  
-                  // Start auto-advancing through the chunks
-                  this.startAutoAdvance(session);
-                });
+              // Store the username and ask for confirmation
+              this.pendingUsername = username;
+              this.isAwaitingConfirmation = true;
+              session.layouts.showTextWall(`Did you want to look up "${username}"? Please say yes or no.`);
             } else {
               session.layouts.showTextWall("Please specify a Twitter username");
             }
@@ -125,8 +139,8 @@ class TwitterGlassesApp extends TpaServer {
             });
           }
         } else {
-          // Show in-progress transcription only if not displaying Twitter info
-          if (!this.isDisplayingTwitterInfo) {
+          // Show in-progress transcription only if not displaying Twitter info and not awaiting confirmation
+          if (!this.isDisplayingTwitterInfo && !this.isAwaitingConfirmation) {
             session.layouts.showTextWall(data.text);
           }
         }
@@ -166,6 +180,55 @@ class TwitterGlassesApp extends TpaServer {
 
     // Add cleanup handlers
     cleanup.forEach(handler => this.addCleanupHandler(handler));
+  }
+  
+  /**
+   * Fetch Twitter profile information
+   */
+  private fetchTwitterProfile(session: TpaSession, twitterAgent: TwitterAgent, username: string): void {
+    twitterAgent.getProfileInfo(username)
+      .then(profileInfo => {
+        if (profileInfo) {
+          // Format the profile data into readable text
+          const formattedText = this.formatTwitterProfile(profileInfo);
+          
+          // Process the profile info into chunks for better reading
+          this.twitterChunks = this.chunkText(formattedText, 1000, 100);
+          this.currentChunkIndex = 0;
+          this.isDisplayingTwitterInfo = true;
+          
+          // Display the first chunk
+          session.layouts.showTextWall("Twitter profile information retrieved. Starting presentation.", {
+            durationMs: 3000
+          });
+          
+          // Start auto-advancing through the chunks
+          this.startAutoAdvance(session);
+        } else {
+          session.layouts.showTextWall("Could not retrieve Twitter profile information.");
+        }
+      });
+  }
+  
+  /**
+   * Format Twitter profile data into readable text
+   */
+  private formatTwitterProfile(profile: any): string {
+    if (!profile) return "No profile data available";
+    
+    let formattedText = `📱 TWITTER PROFILE: ${profile.username}\n\n`;
+    formattedText += `📝 ABOUT:\n${profile.description}\n\n`;
+    formattedText += `🔍 RECENT POSTS:\n\n`;
+    
+    if (profile.posts && profile.posts.length > 0) {
+      profile.posts.forEach((post: any, index: number) => {
+        formattedText += `[${post.date}] ${post.content}\n\n`;
+      });
+    } else {
+      formattedText += "No recent posts found.\n";
+    }
+    
+    return formattedText;
   }
   
   private displayTwitterChunk(session: TpaSession): void {
@@ -306,7 +369,7 @@ class TwitterGlassesApp extends TpaServer {
 const app = new TwitterGlassesApp({
   packageName: 'org.augmentos.twitter', // make sure this matches your app in dev console
   apiKey: 'your_api_key', // Not used right now, play nice
-  port: 80, // The port you're hosting the server on
+  port: 3000, // Using port 3000 to avoid permission issues
   augmentOSWebsocketUrl: 'wss://staging.augmentos.org/tpa-ws' //AugmentOS url
 });
 
