@@ -30,38 +30,107 @@ export class TwitterAgent {
     
     try {
       const result = await this.runPythonAgent(username);
+      console.log("Raw result from Python agent:", result);
       
       // Try to parse the JSON from the result
       try {
         // Extract JSON from the text response
         const jsonMatch = result.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
-          const jsonStr = jsonMatch[0];
-          const data = JSON.parse(jsonStr);
-          
-          // Extract the relevant information
-          const profile: TwitterProfile = {
-            username: data.Grok_Chat_Tab?.Username || data["Grok Chat Tab"]?.Username || "Unknown",
-            description: data.Grok_Chat_Tab?.Description || data["Grok Chat Tab"]?.Description || "No description available",
-            posts: []
-          };
-          
-          // Extract posts
-          const posts = data.Grok_Chat_Tab?.Posts || data["Grok Chat Tab"]?.Posts || [];
-          profile.posts = posts.map((post: any) => ({
-            date: post.Date || "",
-            content: post.Content || "",
-            link: post.Link || ""
-          }));
-          
-          return profile;
+          try {
+            const jsonStr = jsonMatch[0];
+            const data = JSON.parse(jsonStr);
+            
+            // Extract the relevant information
+            const profile: TwitterProfile = {
+              username: data.Grok_Chat_Tab?.Username || data["Grok Chat Tab"]?.Username || "Unknown",
+              description: data.Grok_Chat_Tab?.Description || data["Grok Chat Tab"]?.Description || "No description available",
+              posts: []
+            };
+            
+            // Extract posts
+            const posts = data.Grok_Chat_Tab?.Posts || data["Grok Chat Tab"]?.Posts || [];
+            profile.posts = posts.map((post: any) => ({
+              date: post.Date || "",
+              content: post.Content || "",
+              link: post.Link || ""
+            }));
+            
+            return profile;
+          } catch (jsonError) {
+            console.error("JSON parsing error:", jsonError);
+            // Fall through to text extraction
+          }
         }
+        
+        // If JSON parsing fails, try to extract information from the text
+        console.log("Falling back to text extraction");
+        
+        // Extract username
+        let username = "Unknown";
+        const usernameMatch = result.match(/Username: ([^\n]+)/);
+        if (usernameMatch) {
+          username = usernameMatch[1];
+        }
+        
+        // Extract description
+        let description = "No description available";
+        const descriptionMatch = result.match(/Description: ([^\n]+)/);
+        if (descriptionMatch) {
+          description = descriptionMatch[1];
+        } else {
+          // Try to find any paragraph that might be a description
+          const lines = result.split('\n');
+          for (const line of lines) {
+            if (line.length > 50 && !line.includes('Date:') && !line.includes('Content:')) {
+              description = line.trim();
+              break;
+            }
+          }
+        }
+        
+        // Extract posts
+        const posts = [];
+        const postMatches = result.matchAll(/Date: ([^\n]+)[\s\S]*?Content: ([^\n]+)/g);
+        for (const match of postMatches) {
+          posts.push({
+            date: match[1],
+            content: match[2],
+            link: ""
+          });
+        }
+        
+        // If no posts were found, try to extract any content that looks like posts
+        if (posts.length === 0) {
+          const lines = result.split('\n');
+          for (let i = 0; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (line.match(/^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/)) {
+              posts.push({
+                date: line,
+                content: lines[i+1]?.trim() || "",
+                link: ""
+              });
+              i++; // Skip the next line
+            }
+          }
+        }
+        
+        return {
+          username,
+          description,
+          posts: posts.length > 0 ? posts : [{
+            date: "N/A",
+            content: "No posts found",
+            link: ""
+          }]
+        };
       } catch (parseError) {
-        console.error('Error parsing Twitter profile JSON:', parseError);
-        // If JSON parsing fails, return the raw text
+        console.error('Error parsing Twitter profile data:', parseError);
+        // If all parsing fails, return the raw text
         return {
           username: username,
-          description: "Could not parse profile data",
+          description: "Raw profile data",
           posts: [{
             date: "N/A",
             content: result,
@@ -69,17 +138,6 @@ export class TwitterAgent {
           }]
         };
       }
-      
-      // If we couldn't extract JSON, return the raw text
-      return {
-        username: username,
-        description: "Raw profile data",
-        posts: [{
-          date: "N/A",
-          content: result,
-          link: ""
-        }]
-      };
     } catch (error) {
       this.session.layouts.showTextWall(`Error fetching Twitter profile: ${error.message}`);
       console.error('Twitter agent error:', error);
@@ -94,17 +152,21 @@ export class TwitterAgent {
    */
   private runPythonAgent(username: string): Promise<string> {
     return new Promise((resolve, reject) => {
+      // Sanitize the username to prevent command injection
+      const sanitizedUsername = username.replace(/[^a-zA-Z0-9_]/g, '');
+      console.log(`[DEBUG] Running Python agent with sanitized username: "${sanitizedUsername}"`);
+      
       // Path to the Python script relative to where this code will run
       const pythonScript = path.join(__dirname, 'butwitter', 'agent.py');
       
       // Check if the script exists
       if (!fs.existsSync(pythonScript)) {
-        console.error(`Python script not found at: ${pythonScript}`);
+        console.error(`[DEBUG] Python script not found at: ${pythonScript}`);
         reject(new Error(`Python script not found at: ${pythonScript}`));
         return;
       }
       
-      console.log(`Running Python script: ${pythonScript}`);
+      console.log(`[DEBUG] Running Python script: ${pythonScript}`);
       
       // Try different Python executable names
       const pythonCommands = ['python3', 'python', 'py'];
@@ -114,16 +176,18 @@ export class TwitterAgent {
       // Try each Python command until one works
       for (const cmd of pythonCommands) {
         try {
-          console.log(`Attempting to run with ${cmd}...`);
-          pythonProcess = spawn(cmd, [pythonScript, username]);
+          console.log(`[DEBUG] Attempting to run with ${cmd}...`);
+          pythonProcess = spawn(cmd, [pythonScript, sanitizedUsername]);
+          console.log(`[DEBUG] Spawn successful with ${cmd}`);
           break; // If spawn doesn't throw, we found a working command
         } catch (error) {
-          console.log(`Command ${cmd} failed: ${error.message}`);
+          console.log(`[DEBUG] Command ${cmd} failed: ${error.message}`);
           errorOutput += `Failed to run with ${cmd}: ${error.message}\n`;
         }
       }
       
       if (!pythonProcess) {
+        console.error("[DEBUG] Could not find Python executable");
         reject(new Error(`Could not find Python executable. Tried: ${pythonCommands.join(', ')}. ${errorOutput}`));
         return;
       }
@@ -144,9 +208,19 @@ export class TwitterAgent {
         errorOutput += chunk;
       });
       
+      // Add a timeout to kill the process if it takes too long
+      const processTimeout = setTimeout(() => {
+        if (pythonProcess) {
+          console.error("[DEBUG] Python process timed out after 120 seconds");
+          pythonProcess.kill();
+          reject(new Error("Python process timed out after 120 seconds"));
+        }
+      }, 120000); // 120 second timeout (2 minutes)
+      
       // Handle process completion
       pythonProcess.on('close', (code) => {
-        console.log(`Python process exited with code ${code}`);
+        clearTimeout(processTimeout); // Clear the timeout
+        console.log(`[DEBUG] Python process exited with code ${code}`);
         if (code === 0) {
           resolve(output.trim());
         } else {
@@ -165,7 +239,8 @@ export class TwitterAgent {
       
       // Handle process errors
       pythonProcess.on('error', (error) => {
-        console.error(`Failed to start Python process: ${error.message}`);
+        clearTimeout(processTimeout); // Clear the timeout
+        console.error(`[DEBUG] Failed to start Python process: ${error.message}`);
         reject(new Error(`Failed to start Python process: ${error.message}`));
       });
     });
